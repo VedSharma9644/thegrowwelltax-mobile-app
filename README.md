@@ -1,3 +1,43 @@
+# The GrowWell Tax UI Demo
+
+A simplified Expo project that highlights the core screens we plan to ship. It runs purely with static data, so there are no sign-in flows, API calls, or uploads—just polished layouts for demos and design reviews.
+
+## 🚀 Demo walkthrough
+
+1. `npm install`
+2. `npm start`
+3. Open the experience in Expo Go, an emulator, or via `npm run web`.
+
+The demo includes the following screens:
+
+- **Landing**: Hero messaging plus CTA buttons into the tour.
+- **Dashboard preview**: Tiles with mock refund snapshots, alerts, and actions.
+- **Tax wizard preview**: Step-by-step checklist without functional forms.
+- **Support center**: Static help copy and contact details.
+
+## 🗂️ Project layout
+
+```
+TheGrowWellTax/
+├── assets/                # Static imagery for the demo
+├── navigation/            # Minimal stack navigator
+├── screens/               # Static UI previews
+├── App.js                 # Entry point with SafeArea + navigator
+├── app.json               # Expo configuration
+├── package.json           # Trimmed dependencies + scripts
+└── tsconfig.json          # Expo base config
+```
+
+## 🔧 Dependencies
+
+- `expo` 54.x
+- `react` 19.x
+- `react-native` 0.81.x
+- `@react-navigation/native` + `@react-navigation/native-stack`
+- `react-native-safe-area-context`
+- `react-native-screens`
+
+Re-run `npm install` whenever the dependency list changes to regenerate `package-lock.json`.
 # TaxFilingApp - Mobile Tax Filing Solution
 
 A comprehensive React Native mobile application for streamlined tax filing and document management. Built with Expo, TypeScript, and modern React Native practices.

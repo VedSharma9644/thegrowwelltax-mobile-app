@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "TheGrowWellTax",
+    "name": "The Growwell Tax",
     "slug": "TheGrowWellTax",
     "version": "1.0.0",
     "sdkVersion": "53.0.0",
@@ -10,6 +10,24 @@
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.creayaa.thegrowwellios",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.creayaa.thegrowwell",
+      "versionCode": 1
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
     }
   }
 }
