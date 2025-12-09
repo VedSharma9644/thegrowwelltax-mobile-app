@@ -1,6 +1,94 @@
 import React from 'react';
 import { ScrollView, View, Text, StyleSheet, Pressable } from 'react-native';
 
+const tourScreens = [
+  { title: 'Dashboard', route: 'Dashboard', copy: 'Hero snapshot of refund progress and alerts.' },
+  { title: 'Tax Wizard', route: 'TaxWizard', copy: 'Step-based filing journey with static guidance.' },
+  { title: 'Document Review', route: 'DocumentReview', copy: 'Review workflow overview with approval stages.' },
+  { title: 'Document Upload', route: 'DocumentUpload', copy: 'Upload flow with metadata tagging steps.' },
+  { title: 'Support', route: 'SupportRequest', copy: 'Support channels and outreach messaging.' },
+];
+
+export default function LandingScreen({ navigation }: { navigation: any }) {
+  return (
+    <ScrollView contentContainerStyle={styles.container}>
+      <Text style={styles.title}>The GrowWell Tax Preview</Text>
+      <Text style={styles.subtitle}>
+        Tap into any screen to showcase the final visual & layout work. No backend wiring is required.
+      </Text>
+
+      <View style={styles.grid}>
+        {tourScreens.map((screen) => (
+          <Pressable
+            key={screen.route}
+            style={({ pressed }) => [
+              styles.card,
+              pressed && styles.cardPressed,
+            ]}
+            onPress={() => navigation.navigate(screen.route)}
+          >
+            <Text style={styles.cardTitle}>{screen.title}</Text>
+            <Text style={styles.cardCopy}>{screen.copy}</Text>
+          </Pressable>
+        ))}
+      </View>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    padding: 24,
+    paddingTop: 64,
+    backgroundColor: '#f3f4f6',
+    minHeight: '100%',
+  },
+  title: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 12,
+  },
+  subtitle: {
+    fontSize: 16,
+    color: '#475467',
+    marginBottom: 24,
+  },
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+  card: {
+    width: '48%',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
+  },
+  cardPressed: {
+    opacity: 0.8,
+    transform: [{ translateY: 1 }],
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#0f172a',
+    marginBottom: 6,
+  },
+  cardCopy: {
+    fontSize: 13,
+    color: '#475467',
+  },
+});
+import React from 'react';
+import { ScrollView, View, Text, StyleSheet, Pressable } from 'react-native';
+
 type LandingScreenProps = {
   navigation: {
     navigate: (route: string) => void;
