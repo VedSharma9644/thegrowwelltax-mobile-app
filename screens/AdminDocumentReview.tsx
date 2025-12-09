@@ -1,0 +1,2698 @@
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, Alert, Modal, Dimensions, KeyboardAvoidingView, Platform, ActivityIndicator, Linking, TouchableOpacity } from 'react-native';
+import { Button } from './ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
+import { Textarea } from './ui/textarea';
+import { Checkbox } from './ui/checkbox';
+import { Picker } from '@react-native-picker/picker';
+import { useNavigation } from '@react-navigation/native';
+import { Ionicons, FontAwesome, Feather } from '@expo/vector-icons';
+import SafeAreaWrapper from '../components/SafeAreaWrapper';
+import { useAuth } from '../contexts/AuthContext';
+import ApiService from '../services/api';
+import * as DocumentPicker from 'expo-document-picker';
+import { uploadDocumentToGCS } from '../services/gcsService';
+import { BackgroundColors, BrandColors } from '../utils/colors';
+import { formatAdminNoteDate } from '../utils/dateUtils';
+import { 
+  SectionSelector,
+  AdditionalIncomeManagement,
+  MainActionCard,
+  SectionSelectionModal,
+  AdditionalIncomeModal,
+  DependentsModal,
+  PersonalInfoModal,
+  MedicalDeductionModal,
+  PreviousYearTaxModal,
+  EducationModal,
+  HomeownerDeductionModal
+} from './AdminDocumentReviewComponents/index';
+
+const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
+
+// Helper functions for status display
+const getStatusColor = (status) => {
+  switch (status?.toLowerCase()) {
+    case 'approved':
+    case 'completed':
+      return '#28a745';
+    case 'pending':
+    case 'in_progress':
+      return '#ffc107';
+    case 'submitted':
+      return '#17a2b8';
+    case 'rejected':
+    case 'error':
+      return '#dc3545';
+    case 'draft':
+      return '#6c757d';
+    default:
+      return '#6c757d';
+  }
+};
+
+// Helper function to clean up document names
+const cleanDocumentName = (originalName, docType) => {
+  if (!originalName) return 'Tax Document.pdf';
+  
+  // If it's a problematic name pattern, create a clean one
+  if (originalName.includes('document:') || originalName.includes('draft return')) {
+    const currentYear = new Date().getFullYear();
+    if (docType === 'draft_return') {
+      return `Tax Return Draft ${currentYear}.pdf`;
+    } else if (docType === 'final_return') {
+      return `Tax Return Final ${currentYear}.pdf`;
+    } else {
+      return `Tax Document ${currentYear}.pdf`;
+    }
+  }
+  
+  // If it's already a clean name, return as is
+  return originalName;
+};
+
+const getStatusDisplayText = (status) => {
+  switch (status?.toLowerCase()) {
+    case 'approved':
+      return '✅ Approved';
+    case 'completed':
+      return '✅ Completed';
+    case 'pending':
+      return '⏳ Pending Review';
+    case 'in_progress':
+      return '🔄 In Progress';
+    case 'submitted':
+      return '📤 Submitted';
+    case 'rejected':
+      return '❌ Rejected';
+    case 'error':
+      return '❌ Error';
+    case 'draft':
+      return '📝 Draft';
+    default:
+      return status || 'Unknown';
+  }
+};
+
+const DocumentReview = () => {
+  const navigation = useNavigation<any>();
+  const { user, token } = useAuth();
+  const [notes, setNotes] = useState('');
+  const [isApproved, setIsApproved] = useState(false);
+  const [showApprovalModal, setShowApprovalModal] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [taxForms, setTaxForms] = useState([]);
+  const [adminDocuments, setAdminDocuments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [selectedDocument, setSelectedDocument] = useState(null);
+  const [showDocumentModal, setShowDocumentModal] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploadCategory, setUploadCategory] = useState('');
+  const [uploadDescription, setUploadDescription] = useState('');
+  const [additionalDocuments, setAdditionalDocuments] = useState([]);
+  const [showEditInfoModal, setShowEditInfoModal] = useState(false);
+  const [selectedEditSection, setSelectedEditSection] = useState('');
+  const [showEditFormModal, setShowEditFormModal] = useState(false);
+  const [additionalIncome, setAdditionalIncome] = useState([]);
+  const [dependents, setDependents] = useState([]);
+  const [ssn, setSsn] = useState('');
+  const [isSubmittingInfo, setIsSubmittingInfo] = useState(false);
+  const [editingRecord, setEditingRecord] = useState(null);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [formData, setFormData] = useState({
+    incomeSource: '',
+    incomeAmount: '',
+    incomeDescription: '',
+    customIncomeSource: '',
+    dependentName: '',
+    dependentRelationship: '',
+    dependentDob: '',
+    dependentAge: '',
+    customRelationship: '',
+    ssn: ''
+  });
+  const [pendingDocuments, setPendingDocuments] = useState([]);
+  const [activeSection, setActiveSection] = useState<'additional-income' | 'dependents' | 'personal-info'>('additional-income');
+  
+  // New modal states
+  const [showSectionModal, setShowSectionModal] = useState(false);
+  const [showW2FormsModal, setShowW2FormsModal] = useState(false);
+  const [showPreviousYearTaxModal, setShowPreviousYearTaxModal] = useState(false);
+  const [showMedicalDeductionModal, setShowMedicalDeductionModal] = useState(false);
+  const [showEducationModal, setShowEducationModal] = useState(false);
+  const [showHomeownerDeductionModal, setShowHomeownerDeductionModal] = useState(false);
+  const [showAdditionalIncomeModal, setShowAdditionalIncomeModal] = useState(false);
+  const [showDependentsModal, setShowDependentsModal] = useState(false);
+  const [showPersonalInfoModal, setShowPersonalInfoModal] = useState(false);
+
+  // Handler functions for new modal flow
+  const handleMainActionPress = () => {
+    setShowSectionModal(true);
+  };
+
+  const handleSectionSelect = (section: 'w2-forms' | 'previous-year-tax' | 'medical-deduction' | 'education' | 'homeowner-deduction' | 'additional-income' | 'dependents' | 'personal-info') => {
+    setShowSectionModal(false);
+    if (section === 'w2-forms') {
+      setShowW2FormsModal(true);
+    } else if (section === 'previous-year-tax') {
+      setShowPreviousYearTaxModal(true);
+    } else if (section === 'medical-deduction') {
+      setShowMedicalDeductionModal(true);
+    } else if (section === 'education') {
+      setShowEducationModal(true);
+    } else if (section === 'homeowner-deduction') {
+      setShowHomeownerDeductionModal(true);
+    } else if (section === 'additional-income') {
+      setShowAdditionalIncomeModal(true);
+    } else if (section === 'dependents') {
+      setShowDependentsModal(true);
+    } else if (section === 'personal-info') {
+      setShowPersonalInfoModal(true);
+    }
+  };
+
+  const handleCloseW2FormsModal = () => {
+    setShowW2FormsModal(false);
+  };
+
+  const handleClosePreviousYearTaxModal = () => {
+    setShowPreviousYearTaxModal(false);
+  };
+
+  const handleCloseMedicalDeductionModal = () => {
+    setShowMedicalDeductionModal(false);
+  };
+
+  const handleCloseEducationModal = () => {
+    setShowEducationModal(false);
+  };
+
+  const handleCloseHomeownerDeductionModal = () => {
+    setShowHomeownerDeductionModal(false);
+  };
+
+  const handleCloseAdditionalIncomeModal = () => {
+    setShowAdditionalIncomeModal(false);
+  };
+
+  const handleCloseDependentsModal = () => {
+    setShowDependentsModal(false);
+  };
+
+  const handleClosePersonalInfoModal = () => {
+    setShowPersonalInfoModal(false);
+  };
+
+  // Load existing personal information data from tax forms
+  const loadExistingPersonalInfo = async () => {
+    try {
+      // Get the most recent tax form
+      const currentForm = getApprovedTaxForm();
+      
+      if (currentForm && currentForm.id) {
+        console.log('🔄 Loading personal info for tax form:', currentForm.id);
+        
+        // Fetch detailed tax form data including additional income sources
+        const response = await ApiService.makeRequest(`/tax-forms/${currentForm.id}/personal-info`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (response.success && response.data) {
+          const formData = response.data;
+          
+          // Load additional income from detailed form data
+          if (formData.additionalIncomeSources && Array.isArray(formData.additionalIncomeSources)) {
+            const incomeData = formData.additionalIncomeSources.map((item, index) => ({
+              id: item.id || `income_${index}`,
+              source: item.source || 'Additional Income',
+              amount: item.amount || '0',
+              description: item.description || '',
+              documents: item.documents || []
+            }));
+            setAdditionalIncome(incomeData);
+            console.log('✅ Loaded additional income sources:', incomeData.length);
+          } else {
+            setAdditionalIncome([]);
+            console.log('📭 No additional income sources found');
+          }
+          
+          // Load dependents from detailed form data
+          if (formData.dependents && Array.isArray(formData.dependents)) {
+            const dependentsData = formData.dependents.map((item, index) => ({
+              id: item.id || `dependent_${index}`,
+              name: item.name || 'Dependent',
+              relationship: item.relationship || 'Family Member',
+              dob: item.dob || '',
+              age: item.age || ''
+            }));
+            setDependents(dependentsData);
+            console.log('✅ Loaded dependents:', dependentsData.length);
+          } else {
+            setDependents([]);
+            console.log('📭 No dependents found');
+          }
+          
+          // Load SSN from detailed form data
+          if (formData.socialSecurityNumber) {
+            setSsn(formData.socialSecurityNumber);
+            console.log('✅ Loaded SSN');
+          }
+        } else {
+          console.log('⚠️ Failed to load detailed tax form data');
+          setAdditionalIncome([]);
+          setDependents([]);
+        }
+      } else {
+        console.log('⚠️ No approved tax form found');
+        setAdditionalIncome([]);
+        setDependents([]);
+      }
+    } catch (error) {
+      console.error('❌ Error loading personal information:', error);
+      setAdditionalIncome([]);
+      setDependents([]);
+    }
+  };
+
+  // Fetch admin documents
+  const fetchAdminDocuments = async () => {
+    if (!token) return;
+
+    try {
+      const response = await ApiService.getAdminDocuments(token);
+      
+      if (response && response.success) {
+        setAdminDocuments(response.data || []);
+      } else {
+        setAdminDocuments([]);
+      }
+    } catch (err) {
+      setAdminDocuments([]);
+    }
+  };
+
+  // Fetch additional user uploaded documents
+  const fetchAdditionalDocuments = async () => {
+    if (!token) return;
+
+    try {
+      const response = await ApiService.getUserDocuments(token);
+      
+      if (response && response.success) {
+        setAdditionalDocuments(response.data || []);
+      } else {
+        setAdditionalDocuments([]);
+      }
+    } catch (err) {
+      setAdditionalDocuments([]);
+    }
+  };
+
+  // Fetch tax forms data
+  useEffect(() => {
+    const fetchTaxForms = async () => {
+      if (!token) {
+        setLoading(false);
+        return;
+      }
+
+      try {
+        setLoading(true);
+        const response = await ApiService.getTaxFormHistory(token);
+        if (response.success) {
+          setTaxForms(response.data || []);
+        } else {
+          setError('Failed to load tax forms');
+        }
+      } catch (err) {
+        console.error('Error fetching tax forms:', err);
+        setError('Error loading tax forms');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchTaxForms().then(async () => {
+      // Load personal info after tax forms are fetched
+      await loadExistingPersonalInfo();
+    });
+    fetchAdminDocuments();
+    fetchAdditionalDocuments();
+  }, [token]);
+
+  // Get the most recent tax form that allows editing (approved, processing, or any submitted form)
+  const getApprovedTaxForm = () => {
+    // Allow editing for forms that are approved, processing, or any submitted form
+    const editableStatuses = ['approved', 'processing', 'submitted', 'under_review'];
+    const editableForm = taxForms.find(form => editableStatuses.includes(form.status));
+    const fallbackForm = taxForms[0];
+    
+    console.log('🔍 Tax forms available:', taxForms.map(f => ({ id: f.id, status: f.status })));
+    console.log('🔍 Looking for editable form with statuses:', editableStatuses);
+    console.log('🔍 Found editable form:', editableForm ? { id: editableForm.id, status: editableForm.status } : 'None');
+    console.log('🔍 Using fallback form:', fallbackForm ? { id: fallbackForm.id, status: fallbackForm.status } : 'None');
+    
+    return editableForm || fallbackForm;
+  };
+
+  // Get all documents from the approved tax form
+  const getAllDocuments = () => {
+    const approvedForm = getApprovedTaxForm();
+    if (!approvedForm || !approvedForm.documents) return [];
+
+    return approvedForm.documents.map(doc => ({
+      id: doc.id,
+      name: doc.name,
+      category: doc.category,
+      gcsPath: doc.gcsPath,
+      uploadedAt: doc.uploadedAt?.toDate ? doc.uploadedAt.toDate().toLocaleDateString() : 'Unknown',
+      size: doc.size ? `${(doc.size / 1024 / 1024).toFixed(1)} MB` : 'Unknown',
+      type: 'Personal Document'
+    }));
+  };
+
+  // Get admin document (if any)
+  const getAdminDocument = () => {
+    
+    // First try to get from admin documents API
+    if (adminDocuments && adminDocuments.length > 0) {
+      // Find the most recent draft or final return
+      const adminDoc = adminDocuments.find(doc => 
+        doc.type === 'draft_return' || doc.type === 'final_return'
+      ) || adminDocuments[0];
+
+
+      if (adminDoc) {
+        // Find admin notes separately
+        const adminNotesDoc = adminDocuments.find(doc => doc.type === 'admin_notes');
+        const adminNotes = adminNotesDoc ? adminNotesDoc.content : '';
+        
+
+        const document = {
+          id: adminDoc.id,
+          name: cleanDocumentName(adminDoc.name, adminDoc.type),
+          uploadedBy: 'Admin',
+          uploadedAt: adminDoc.createdAt ? new Date(adminDoc.createdAt).toLocaleDateString() : 'Unknown',
+          status: adminDoc.status || 'pending',
+          size: adminDoc.size ? `${(adminDoc.size / 1024 / 1024).toFixed(1)} MB` : 'Unknown',
+          adminNotes: adminNotes,
+          publicUrl: adminDoc.publicUrl,
+          gcsPath: adminDoc.gcsPath,
+          type: adminDoc.type,
+          applicationId: adminDoc.applicationId
+        };
+        
+
+        return document;
+      }
+    }
+
+    // Fallback to tax form data (legacy)
+    const approvedForm = getApprovedTaxForm();
+    if (!approvedForm) {
+      return null;
+    }
+
+    const fallbackDocument = {
+      id: approvedForm.id,
+      name: `Tax Return Review ${approvedForm.taxYear || new Date().getFullYear()}.pdf`,
+      uploadedBy: 'Admin',
+      uploadedAt: approvedForm.updatedAt?.toDate ? approvedForm.updatedAt.toDate().toLocaleDateString() : 'Unknown',
+      status: approvedForm.status,
+      size: '2.4 MB', // Mock size for admin document
+      adminNotes: approvedForm.adminNotes || '',
+      expectedReturn: approvedForm.expectedReturn || 0
+    };
+    
+    return fallbackDocument;
+  };
+
+  const allDocuments = getAllDocuments();
+  const adminDocument = getAdminDocument();
+  
+  // Check if application is under review (button should be disabled)
+  const isUnderReview = () => {
+    const approvedForm = getApprovedTaxForm();
+    return approvedForm && approvedForm.status === 'under_review';
+  };
+
+  const handleApprove = () => {
+    setShowApprovalModal(true);
+  };
+
+  const handleAcceptDocuments = () => {
+    if (!acceptedTerms) {
+      Alert.alert('Terms & Conditions', 'Please accept the terms and conditions to proceed.');
+      return;
+    }
+
+    setShowApprovalModal(false);
+    setIsApproved(true);
+    
+    // Navigate to Payment after a brief delay
+    setTimeout(() => {
+      navigation.navigate('Payment');
+    }, 1500);
+  };
+
+  const handleRejectDocuments = () => {
+    setShowApprovalModal(false);
+    Alert.alert(
+      'Documents Rejected',
+      'Your documents have been rejected. Please review and make necessary changes before proceeding.',
+      [{ text: 'OK' }]
+    );
+  };
+
+  const handleSendNotes = () => {
+    if (!notes.trim()) {
+      Alert.alert('Error', 'Please enter your notes before sending.');
+      return;
+    }
+
+    Alert.alert(
+      'Send Notes',
+      'Are you sure you want to send these notes to the admin?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Send', 
+          onPress: () => {
+            Alert.alert('Success', 'Your notes have been sent to the admin. They will review and make necessary changes.');
+            setNotes('');
+          }
+        }
+      ]
+    );
+  };
+
+  const handleViewDocument = (document) => {
+    if (!document) return;
+    
+    setSelectedDocument(document);
+    setShowDocumentModal(true);
+  };
+
+  const openDocumentInBrowser = (document) => {
+    if (!document) {
+      Alert.alert('Error', 'Document not available');
+      return;
+    }
+
+    // Try to use publicUrl first, then gcsPath
+    const url = document.publicUrl || document.gcsPath;
+    
+    if (!url) {
+      Alert.alert('Error', 'Document URL not available');
+      return;
+    }
+
+    
+    // Open the document URL
+    Linking.openURL(url).catch(err => {
+      console.error('Failed to open document:', err);
+      Alert.alert('Error', 'Could not open document. Please try again.');
+    });
+  };
+
+
+  const pickDocument = async () => {
+    if (!uploadCategory) {
+      Alert.alert('Select Category', 'Please select a document category first.');
+      return;
+    }
+
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['application/pdf', 'image/*', 'text/plain'],
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+
+      if (!result.canceled && result.assets && result.assets[0]) {
+        const file = result.assets[0];
+        await uploadFile({
+          name: file.name || 'Document',
+          uri: file.uri,
+          size: file.size || 0,
+          type: file.mimeType || 'application/octet-stream',
+        });
+      }
+    } catch (error) {
+      console.error('Document picker error:', error);
+      Alert.alert('Error', 'Failed to pick document. Please try again.');
+    }
+  };
+
+  const uploadFile = async (file) => {
+    if (!user?.id) {
+      Alert.alert('Error', 'User not authenticated');
+      return;
+    }
+
+    setIsUploading(true);
+    setUploadProgress(0);
+    setShowUploadModal(false);
+
+    try {
+      
+      const result = await uploadDocumentToGCS(
+        file,
+        user.id,
+        uploadCategory,
+        (progress) => {
+          setUploadProgress(progress);
+        },
+        token
+      );
+
+      if (result.success) {
+        Alert.alert(
+          'Success',
+          'Document uploaded successfully! The admin will review it.',
+          [
+            {
+              text: 'OK',
+              onPress: async () => {
+                // Refresh the document list
+                fetchAdminDocuments();
+                fetchAdditionalDocuments();
+                // Refresh tax forms data
+                try {
+                  const response = await ApiService.getTaxFormHistory(token);
+                  if (response.success) {
+                    setTaxForms(response.data || []);
+                  }
+                } catch (error) {
+                  console.error('Error refreshing tax forms:', error);
+                }
+                // Reset upload state
+                setUploadCategory('');
+                setUploadDescription('');
+                setUploadProgress(0);
+              }
+            }
+          ]
+        );
+      } else {
+        throw new Error('Upload failed');
+      }
+    } catch (error) {
+      console.error('Upload error:', error);
+      Alert.alert(
+        'Upload Failed',
+        error.message || 'Failed to upload document. Please try again.',
+        [{ text: 'OK' }]
+      );
+    } finally {
+      setIsUploading(false);
+      setUploadProgress(0);
+    }
+  };
+
+  const cancelUpload = () => {
+    setShowUploadModal(false);
+    setUploadCategory('');
+    setUploadDescription('');
+    setUploadProgress(0);
+  };
+
+  // Edit Personal Information functions
+  const handleEditPersonalInfo = () => {
+    setShowEditInfoModal(true);
+  };
+
+  const handleSelectEditSection = (section) => {
+    setSelectedEditSection(section);
+    setShowEditInfoModal(false);
+    setShowEditFormModal(true);
+    setIsEditMode(false);
+    setEditingRecord(null);
+    setPendingDocuments([]); // Clear pending documents when starting new
+    setFormData({
+      incomeSource: '',
+      incomeAmount: '',
+      incomeDescription: '',
+      customIncomeSource: '',
+      dependentName: '',
+      dependentRelationship: '',
+      dependentDob: '',
+      dependentAge: '',
+      customRelationship: '',
+      ssn: ssn
+    });
+  };
+
+  const handleCancelEditInfo = () => {
+    setShowEditInfoModal(false);
+    setSelectedEditSection('');
+  };
+
+  const handleCancelEditForm = () => {
+    setShowEditFormModal(false);
+    setSelectedEditSection('');
+    setIsEditMode(false);
+    setEditingRecord(null);
+    setPendingDocuments([]); // Clear pending documents when canceling
+    setFormData({
+      incomeSource: '',
+      incomeAmount: '',
+      incomeDescription: '',
+      customIncomeSource: '',
+      dependentName: '',
+      dependentRelationship: '',
+      dependentDob: '',
+      dependentAge: '',
+      customRelationship: '',
+      ssn: ssn
+    });
+  };
+
+  const handleEditRecord = (record, type) => {
+    setEditingRecord(record);
+    setIsEditMode(true);
+    if (type === 'income') {
+      setFormData({
+        ...formData,
+        incomeSource: record.source || '',
+        incomeAmount: record.amount || ''
+      });
+    } else if (type === 'dependent') {
+      setFormData({
+        ...formData,
+        dependentName: record.name || '',
+        dependentRelationship: record.relationship || '',
+        dependentDob: record.dob || ''
+      });
+    }
+  };
+
+  const handleDeleteRecord = (recordId, type) => {
+    Alert.alert(
+      'Delete Record',
+      'Are you sure you want to delete this record?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            if (type === 'income') {
+              setAdditionalIncome(prev => prev.filter(item => item.id !== recordId));
+            } else if (type === 'dependent') {
+              setDependents(prev => prev.filter(item => item.id !== recordId));
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleAddNew = () => {
+    setIsEditMode(false);
+    setEditingRecord(null);
+    setFormData({
+      incomeSource: '',
+      incomeAmount: '',
+      incomeDescription: '',
+      customIncomeSource: '',
+      dependentName: '',
+      dependentRelationship: '',
+      dependentDob: '',
+      dependentAge: '',
+      customRelationship: '',
+      ssn: ssn
+    });
+  };
+
+  const refreshPersonalInfo = () => {
+    loadExistingPersonalInfo();
+  };
+
+  // Document upload functionality for pending documents (while editing)
+  const handleUploadPendingDocument = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        const file = result.assets[0];
+        
+        // Upload to GCS with specific category for additional income
+        const uploadResult = await uploadDocumentToGCS(
+          {
+            name: file.name,
+            type: file.mimeType || 'application/octet-stream',
+            size: file.size,
+            uri: file.uri,
+          },
+          user.id,
+          'additional_income',
+          (progress) => {
+          },
+          token
+        );
+
+        if (uploadResult.success) {
+          // Create document reference
+          const documentRef = {
+            id: Math.random().toString(36).substr(2, 9),
+            name: file.name,
+            type: file.mimeType || 'application/octet-stream',
+            size: file.size,
+            gcsPath: uploadResult.gcsPath,
+            uploadedAt: new Date().toISOString(),
+            status: 'completed'
+          };
+
+          // Add to pending documents
+          setPendingDocuments(prev => [...prev, documentRef]);
+
+          Alert.alert('Success', 'Document uploaded successfully!');
+        } else {
+          throw new Error('Upload failed');
+        }
+      }
+    } catch (error) {
+      console.error('Document upload error:', error);
+      Alert.alert('Upload Failed', 'Failed to upload document. Please try again.');
+    }
+  };
+
+  // Document upload functionality for existing additional income sources
+  const handleUploadIncomeDocument = async (incomeSourceId) => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        const file = result.assets[0];
+        
+        // Upload to GCS with specific category for additional income
+        const uploadResult = await uploadDocumentToGCS(
+          {
+            name: file.name,
+            type: file.mimeType || 'application/octet-stream',
+            size: file.size,
+            uri: file.uri,
+          },
+          user.id,
+          'additional_income',
+          (progress) => {
+          },
+          token
+        );
+
+        if (uploadResult.success) {
+          // Create document reference
+          const documentRef = {
+            id: Math.random().toString(36).substr(2, 9),
+            name: file.name,
+            type: file.mimeType || 'application/octet-stream',
+            size: file.size,
+            gcsPath: uploadResult.gcsPath,
+            uploadedAt: new Date().toISOString(),
+            status: 'completed'
+          };
+
+          // Update the specific income source with the document
+          setAdditionalIncome(prev => 
+            prev.map(income => 
+              income.id === incomeSourceId 
+                ? { 
+                    ...income, 
+                    documents: [...(income.documents || []), documentRef]
+                  }
+                : income
+            )
+          );
+
+          Alert.alert('Success', 'Document uploaded successfully!');
+        } else {
+          throw new Error('Upload failed');
+        }
+      }
+    } catch (error) {
+      console.error('Document upload error:', error);
+      Alert.alert('Upload Failed', 'Failed to upload document. Please try again.');
+    }
+  };
+
+  // Delete pending document
+  const handleDeletePendingDocument = async (documentId) => {
+    try {
+      // Remove from pending documents
+      setPendingDocuments(prev => prev.filter(doc => doc.id !== documentId));
+      Alert.alert('Success', 'Document removed successfully!');
+    } catch (error) {
+      console.error('Document deletion error:', error);
+      Alert.alert('Error', 'Failed to remove document. Please try again.');
+    }
+  };
+
+  // Delete document from additional income source
+  const handleDeleteIncomeDocument = async (incomeSourceId, documentId) => {
+    try {
+      // Update the income source to remove the document
+      setAdditionalIncome(prev => 
+        prev.map(income => 
+          income.id === incomeSourceId 
+            ? { 
+                ...income, 
+                documents: income.documents?.filter(doc => doc.id !== documentId) || []
+              }
+            : income
+        )
+      );
+
+      Alert.alert('Success', 'Document removed successfully!');
+    } catch (error) {
+      console.error('Document deletion error:', error);
+      Alert.alert('Error', 'Failed to remove document. Please try again.');
+    }
+  };
+
+  const handleSubmitEditForm = async () => {
+    // Validation
+    if (selectedEditSection === 'Additional Income') {
+      if (!formData.incomeSource.trim()) {
+        Alert.alert('Validation Error', 'Please select an income type.');
+        return;
+      }
+      if (formData.incomeSource === 'Other' && !formData.customIncomeSource.trim()) {
+        Alert.alert('Validation Error', 'Please specify the custom income source.');
+        return;
+      }
+      if (!formData.incomeAmount.trim() || isNaN(parseFloat(formData.incomeAmount))) {
+        Alert.alert('Validation Error', 'Please enter a valid amount.');
+        return;
+      }
+    } else if (selectedEditSection === 'Dependents') {
+      if (!formData.dependentName.trim()) {
+        Alert.alert('Validation Error', 'Please enter the dependent\'s name.');
+        return;
+      }
+      if (!formData.dependentRelationship.trim()) {
+        Alert.alert('Validation Error', 'Please select a relationship.');
+        return;
+      }
+      if (formData.dependentRelationship === 'Other' && !formData.customRelationship.trim()) {
+        Alert.alert('Validation Error', 'Please specify the custom relationship.');
+        return;
+      }
+      if (!formData.dependentDob.trim()) {
+        Alert.alert('Validation Error', 'Please enter the date of birth.');
+        return;
+      }
+      if (!formData.dependentAge.trim() || isNaN(parseInt(formData.dependentAge))) {
+        Alert.alert('Validation Error', 'Please enter a valid age.');
+        return;
+      }
+    } else if (selectedEditSection === 'SSN') {
+      if (!formData.ssn.trim()) {
+        Alert.alert('Validation Error', 'Please enter your Social Security Number.');
+        return;
+      }
+    }
+
+    setIsSubmittingInfo(true);
+    
+    try {
+
+      // Here you would implement the API call to update the information
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate API call
+      
+      // Update local state
+      if (selectedEditSection === 'Additional Income') {
+        const finalSource = formData.incomeSource === 'Other' ? formData.customIncomeSource : formData.incomeSource;
+        const newRecord = {
+          id: editingRecord?.id || Date.now().toString(),
+          source: finalSource,
+          amount: formData.incomeAmount,
+          description: formData.incomeDescription || undefined,
+          documents: [...(editingRecord?.documents || []), ...pendingDocuments]
+        };
+        
+        if (isEditMode) {
+          setAdditionalIncome(prev => 
+            prev.map(item => item.id === editingRecord.id ? newRecord : item)
+          );
+        } else {
+          setAdditionalIncome(prev => [...prev, newRecord]);
+        }
+        
+        // Clear pending documents after saving
+        setPendingDocuments([]);
+      } else if (selectedEditSection === 'Dependents') {
+        const finalRelationship = formData.dependentRelationship === 'Other' ? formData.customRelationship : formData.dependentRelationship;
+        const newRecord = {
+          id: editingRecord?.id || Date.now().toString(),
+          name: formData.dependentName,
+          relationship: finalRelationship,
+          dob: formData.dependentDob,
+          age: formData.dependentAge
+        };
+        
+        if (isEditMode) {
+          setDependents(prev => 
+            prev.map(item => item.id === editingRecord.id ? newRecord : item)
+          );
+        } else {
+          setDependents(prev => [...prev, newRecord]);
+        }
+      } else if (selectedEditSection === 'SSN') {
+        setSsn(formData.ssn);
+      }
+      
+      // Save data to API
+      try {
+        // Prepare update data based on what section is being updated
+        let updateData = {};
+        let logMessage = '';
+
+        if (selectedEditSection === 'Additional Income') {
+          updateData = {
+            additionalIncomeSources: additionalIncome
+          };
+          logMessage = `📊 Updating additional income sources (${additionalIncome.length} sources)`;
+        } else if (selectedEditSection === 'Dependents') {
+          updateData = {
+            dependents: dependents
+          };
+          logMessage = `👥 Updating dependents (${dependents.length} dependents)`;
+        } else if (selectedEditSection === 'SSN') {
+          updateData = {
+          socialSecurityNumber: formData.ssn
+        };
+          logMessage = `🔐 Updating Social Security Number`;
+        }
+
+        console.log('📤 Preparing to update:', {
+          section: selectedEditSection,
+          updateData: updateData,
+          logMessage: logMessage
+        });
+
+        // Debug additional income state
+        if (selectedEditSection === 'Additional Income') {
+          console.log('🔍 Additional Income Debug:', {
+            additionalIncomeArray: additionalIncome,
+            arrayLength: additionalIncome.length,
+            arrayContents: additionalIncome.map(item => ({
+              id: item.id,
+              source: item.source,
+              amount: item.amount,
+              description: item.description
+            }))
+          });
+        }
+
+        // Update the current tax form with the new personal information
+        const currentForm = getApprovedTaxForm();
+        if (currentForm && currentForm.id) {
+          console.log('🔄 Updating tax form:', currentForm.id);
+          console.log(logMessage);
+
+          // Save to API
+          const response = await ApiService.makeRequest(`/tax-forms/${currentForm.id}/update-personal-info`, {
+            method: 'PUT',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(updateData)
+          });
+
+          console.log('✅ Update successful:', response);
+        } else {
+          console.log('⚠️ No current tax form found, data saved locally only');
+          console.log('🔍 Available tax forms:', taxForms.map(f => ({ id: f.id, status: f.status })));
+        }
+      } catch (apiError) {
+        console.error('❌ API update failed, data saved locally only:', apiError);
+        console.error('❌ API Error details:', {
+          section: selectedEditSection,
+          message: apiError.message,
+          stack: apiError.stack
+        });
+        // Data is still saved locally, so the user experience isn't broken
+      }
+      
+      Alert.alert(
+        'Success',
+        `${selectedEditSection} ${isEditMode ? 'updated' : 'added'} successfully!`,
+        [{ text: 'OK', onPress: () => setShowEditFormModal(false) }]
+      );
+    } catch (error) {
+      Alert.alert('Error', 'Failed to update information. Please try again.');
+    } finally {
+      setIsSubmittingInfo(false);
+    }
+  };
+
+  // Load data when component mounts
+  useEffect(() => {
+    const fetchTaxForms = async () => {
+      if (!token) return;
+      
+      try {
+        const response = await ApiService.getTaxFormHistory(token);
+        if (response.success) {
+          setTaxForms(response.data);
+        }
+      } catch (error) {
+        console.error('Error fetching tax forms:', error);
+      }
+    };
+
+    fetchTaxForms().then(async () => {
+      await loadExistingPersonalInfo(); // Ensure personal info loads after tax forms
+    });
+    fetchAdminDocuments();
+    fetchAdditionalDocuments();
+  }, [token]);
+
+  return (
+    <SafeAreaWrapper>
+      <KeyboardAvoidingView 
+        style={styles.mainContainer} 
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <ScrollView 
+          contentContainerStyle={styles.container}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* Header */}
+          <View style={styles.header}>
+            <Button 
+              variant="ghost" 
+              onPress={() => navigation.goBack()}
+              style={styles.backButton}
+            >
+              <Ionicons name="arrow-back" size={24} color="#ffffff" />
+            </Button>
+            <Text style={styles.headerTitle}>Draft document review</Text>
+          </View>
+
+          {/* Document Info Section Title */}
+          {!loading && !error && adminDocument && (
+            <View style={styles.sectionTitleContainer}>
+              <Text style={styles.sectionTitle}>
+                <FontAwesome name="file-pdf-o" size={24} color="#D7B04C" />
+                <Text style={styles.sectionTitleText}> Review Filed Tax Document</Text>
+              </Text>
+            </View>
+          )}
+
+          {/* Document Info Card */}
+          {loading ? (
+            <Card style={styles.card}>
+              <CardContent>
+                <View style={styles.loadingContainer}>
+                  <ActivityIndicator size="small" color="#007bff" />
+                  <Text style={styles.loadingText}>Loading tax form data...</Text>
+                </View>
+              </CardContent>
+            </Card>
+          ) : error ? (
+            <Card style={styles.card}>
+              <CardContent>
+                <Text style={styles.errorText}>{error}</Text>
+              </CardContent>
+            </Card>
+          ) : !adminDocument ? (
+            <Card style={styles.card}>
+              <CardContent>
+                <Text style={styles.noDataText}>⏳ No approved tax form found. Please wait for admin approval.</Text>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card style={styles.card}>
+              <CardContent>
+                <View style={styles.documentInfo}>
+                  
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>📅 Date:</Text>
+                    <Text style={styles.dataValue}>{adminDocument.uploadedAt}</Text>
+                  </View>
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>📊 Status:</Text>
+                    <Text style={[
+                      styles.dataValue,
+                      { color: getStatusColor(adminDocument.status) }
+                    ]}>
+                      {getStatusDisplayText(adminDocument.status)}
+                    </Text>
+                  </View>
+                  {'expectedReturn' in adminDocument && adminDocument.expectedReturn > 0 && (
+                    <View style={styles.infoRow}>
+                      <Text style={styles.infoLabel}>💰 Expected Return:</Text>
+                      <Text style={[styles.dataValue, { color: '#28a745', fontWeight: '600' }]}>
+                        ${adminDocument.expectedReturn.toFixed(0)}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+
+                <Button 
+                  style={styles.viewButton} 
+                  onPress={() => openDocumentInBrowser(adminDocument)}
+                >
+                  <Feather name="eye" size={20} color="#fff" />
+                  <Text style={styles.viewButtonText}>View Document</Text>
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Admin Notes Section Title */}
+          {(() => {
+            const hasAdminNotes = adminDocuments && adminDocuments.some(doc => doc.type === 'admin_notes');
+            
+            return hasAdminNotes;
+          })() && (
+            <View style={styles.sectionTitleContainer}>
+              <Text style={styles.sectionTitle}>
+                <Ionicons name="chatbubble-outline" size={24} color="#D7B04C" />
+                <Text style={styles.sectionTitleText}> Tax Consultant Notes</Text>
+              </Text>
+            </View>
+          )}
+
+          {/* Admin Notes Section */}
+          {(() => {
+            const hasAdminNotes = adminDocuments && adminDocuments.some(doc => doc.type === 'admin_notes');
+            
+            return hasAdminNotes;
+          })() && (
+            <Card style={styles.card}>
+              <CardContent>
+                {adminDocuments
+                  .filter(doc => {
+                    const isAdminNotes = doc.type === 'admin_notes';
+
+                    return isAdminNotes;
+                  })
+                  .map((note, index) => {
+                    return (
+                    <View key={note.id || index} style={styles.adminNoteItem}>
+                      <View style={styles.adminNoteHeader}>
+                        <Text style={styles.adminNoteText}>{note.content}</Text>
+                        <View style={styles.adminNoteMeta}>
+                          <Text style={styles.adminNoteDate}>
+                            {note.createdAt ? formatAdminNoteDate(note.createdAt) : 'Unknown date'}
+                          </Text>
+                          {note.status && (
+                            <Text style={[
+                              styles.dataValue,
+                              { color: getStatusColor(note.status), fontSize: 12 }
+                            ]}>
+                              {getStatusDisplayText(note.status)}
+                            </Text>
+                          )}
+                        </View>
+                        {note.applicationId && (
+                          <Text style={[styles.dataValue, { fontSize: 11, color: '#999' }]}>
+                            🆔 Application: {note.applicationId}
+                          </Text>
+                        )}
+                      </View>
+                    </View>
+                    );
+                  })}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* New Modal Flow - Main Action Card */}
+          <View style={styles.sectionTitleContainer}>
+            <Text style={styles.sectionTitle}>
+              <FontAwesome name="edit" size={24} color="#D7B04C" />
+              <Text style={styles.sectionTitleText}> Manage Application Information</Text>
+            </Text>
+          </View>
+
+          <MainActionCard onPress={handleMainActionPress} />
+
+
+          {/* Review Actions Section Title */}
+          <View style={styles.sectionTitleContainer}>
+            <Text style={styles.sectionTitle}>
+              <Ionicons name="checkmark-circle-outline" size={24} color="#D7B04C" />
+              <Text style={styles.sectionTitleText}> Review Actions</Text>
+            </Text>
+          </View>
+
+          {/* Review Actions */}
+          <Card style={styles.card}>
+            <CardContent>
+              <Text style={styles.sectionText}>
+                Please review the document carefully. You can either approve it or send notes to the CA Team for any changes needed.
+              </Text>
+
+              {/* Notes Section */}
+              <View style={styles.notesSection}>
+                <Text style={styles.notesLabel}>Notes to Admin (Optional):</Text>
+                <Textarea
+                  placeholder="Enter any notes or changes you'd like the admin to make..."
+                  value={notes}
+                  onChangeText={setNotes}
+                  style={styles.notesInput}
+                />
+              </View>
+
+              {/* Action Buttons */}
+              <View style={styles.actionButtons}>
+                <Button 
+                  style={isUnderReview() ? 
+                    {...styles.approveButton, ...styles.disabledButton} : 
+                    styles.approveButton
+                  } 
+                  onPress={isUnderReview() ? null : handleApprove}
+                  disabled={isUnderReview()}
+                >
+                  <Ionicons name="checkmark" size={20} color="#fff" />
+                  <Text style={styles.actionButtonText}>
+                    {isUnderReview() ? 'Under Review' : 'Approve & Continue'}
+                  </Text>
+                </Button>
+
+                <Button 
+                  style={styles.notesButton} 
+                  onPress={handleSendNotes}
+                  disabled={!notes.trim()}
+                >
+                  <Ionicons name="send" size={20} color="#fff" />
+                  <Text style={styles.actionButtonText}>Send Notes</Text>
+                </Button>
+              </View>
+            </CardContent>
+          </Card>
+
+          {/* Status Indicator */}
+          {isApproved && (
+            <Card style={[styles.card, styles.approvedCard]}>
+              <CardContent>
+                <View style={styles.approvedContent}>
+                  <Ionicons name="checkmark-circle" size={32} color="#28a745" />
+                  <Text style={styles.approvedText}>
+                    Document approved! Redirecting to payment...
+                  </Text>
+                </View>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Document Approval Modal */}
+          <Modal
+            visible={showApprovalModal}
+            animationType="slide"
+            transparent={true}
+            onRequestClose={() => setShowApprovalModal(false)}
+          >
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <ScrollView 
+                  style={styles.modalScrollView}
+                  showsVerticalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  {/* Modal Header */}
+                  <View style={styles.modalHeader}>
+                    <Ionicons name="document-text" size={32} color="#007bff" />
+                    <Text style={styles.modalTitle}>Document Approval</Text>
+                    <Text style={styles.modalSubtitle}>
+                      Please review all documents and accept terms before proceeding
+                    </Text>
+                  </View>
+
+                  {/* All Documents List */}
+                  <View style={styles.documentsSection}>
+                    <Text style={styles.documentsSectionTitle}>All Documents ({allDocuments.length})</Text>
+                    {allDocuments.map((doc, index) => (
+                      <Card key={doc.id} style={styles.documentCard}>
+                        <CardContent>
+                          <View style={styles.documentCardHeader}>
+                            <FontAwesome name="file-text-o" size={20} color="#007bff" />
+                            <View style={styles.documentCardInfo}>
+                              <Text style={styles.documentCardTitle} numberOfLines={2}>
+                                {'title' in doc ? doc.title : doc.name}
+                              </Text>
+                              <Text style={styles.documentCardType}>{doc.type}</Text>
+                              <Text style={styles.documentCardMeta}>
+                                {doc.size} • {doc.uploadedAt}
+                              </Text>
+                              {'description' in doc && doc.description && (
+                                <Text style={styles.documentCardDesc} numberOfLines={2}>{doc.description}</Text>
+                              )}
+                            </View>
+                          </View>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </View>
+
+                  {/* Terms & Conditions */}
+                  <View style={styles.termsSection}>
+                    <Text style={styles.termsTitle}>Terms & Conditions</Text>
+                    <ScrollView style={styles.termsContent}>
+                      <Text style={styles.termsText}>
+                        1. I confirm that all information provided is accurate and complete to the best of my knowledge.{'\n\n'}
+                        2. I understand that I am responsible for the accuracy of all documents and information submitted.{'\n\n'}
+                        3. I authorize the tax preparation service to file my tax return on my behalf.{'\n\n'}
+                        4. I agree to pay the service fee upon successful filing of my tax return.{'\n\n'}
+                        5. I understand that any errors or omissions may result in penalties or delays.{'\n\n'}
+                        6. I acknowledge that I have reviewed all documents and approve them for filing.{'\n\n'}
+                        7. I understand that I can request changes before final submission.
+                      </Text>
+                    </ScrollView>
+                    
+                    <View style={styles.termsCheckbox}>
+                      <Checkbox
+                        checked={acceptedTerms}
+                        onCheckedChange={setAcceptedTerms}
+                      />
+                      <Text style={styles.termsCheckboxText}>
+                        I accept the terms and conditions
+                      </Text>
+                    </View>
+                  </View>
+                </ScrollView>
+
+                {/* Modal Actions */}
+                <View style={styles.modalActions}>
+                  <Button 
+                    style={styles.rejectButton} 
+                    onPress={handleRejectDocuments}
+                  >
+                    <Ionicons name="close" size={20} color="#fff" />
+                    <Text style={styles.modalButtonText}>Reject</Text>
+                  </Button>
+                  
+                  <Button 
+                    style={styles.acceptButton} 
+                    onPress={handleAcceptDocuments}
+                    disabled={!acceptedTerms}
+                  >
+                    <Ionicons name="checkmark" size={20} color="#fff" />
+                    <Text style={styles.modalButtonText}>Accept & Continue</Text>
+                  </Button>
+                </View>
+              </View>
+            </View>
+          </Modal>
+
+          {/* Document Viewing Modal */}
+          <Modal
+            visible={showDocumentModal}
+            animationType="slide"
+            transparent={true}
+            onRequestClose={() => setShowDocumentModal(false)}
+          >
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <FontAwesome name="file-text-o" size={32} color="#007bff" />
+                  <Text style={styles.modalTitle}>Document Preview</Text>
+                  <Text style={styles.modalSubtitle}>
+                    Document Preview
+                  </Text>
+                </View>
+
+                <View style={styles.documentPreviewSection}>
+                  <Text style={styles.documentPreviewTitle}>Document Details</Text>
+                  <View style={styles.documentPreviewInfo}>
+                    <Text style={styles.documentPreviewLabel}>Category:</Text>` 3`
+                    <Text style={styles.documentPreviewValue}>{selectedDocument?.category}</Text>
+                  </View>
+                  <View style={styles.documentPreviewInfo}>
+                    <Text style={styles.documentPreviewLabel}>Size:</Text>
+                    <Text style={styles.documentPreviewValue}>{selectedDocument?.size}</Text>
+                  </View>
+                  <View style={styles.documentPreviewInfo}>
+                    <Text style={styles.documentPreviewLabel}>Uploaded:</Text>
+                    <Text style={styles.documentPreviewValue}>{selectedDocument?.uploadedAt}</Text>
+                  </View>
+                </View>
+
+                <View style={styles.modalActions}>
+                  <Button 
+                    style={styles.cancelButton} 
+                    onPress={() => setShowDocumentModal(false)}
+                  >
+                    <Ionicons name="close" size={20} color="#fff" />
+                    <Text style={styles.modalButtonText}>Close</Text>
+                  </Button>
+                  
+                  <Button 
+                    style={styles.openButton} 
+                    onPress={() => {
+                      setShowDocumentModal(false);
+                      openDocumentInBrowser(selectedDocument?.gcsPath);
+                    }}
+                  >
+                    <Feather name="external-link" size={20} color="#fff" />
+                    <Text style={styles.modalButtonText}>Open Document</Text>
+                  </Button>
+                </View>
+              </View>
+            </View>
+          </Modal>
+
+          {/* Upload Document Modal */}
+          <Modal
+            visible={showUploadModal}
+            animationType="slide"
+            transparent={true}
+            onRequestClose={cancelUpload}
+          >
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <ScrollView 
+                  style={styles.modalScrollView}
+                  showsVerticalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  {/* Modal Header */}
+                  <View style={styles.modalHeader}>
+                    <Ionicons name="cloud-upload" size={32} color="#007bff" />
+                    <Text style={styles.modalTitle}>Upload Document</Text>
+                    <Text style={styles.modalSubtitle}>
+                      Select document category and upload file
+                    </Text>
+                  </View>
+
+                  {/* Document Category Selection */}
+                  <View style={styles.uploadSection}>
+                    <Text style={styles.uploadSectionTitle}>Document Category</Text>
+                    <View style={styles.categoryGrid}>
+                      {[
+                        { id: 'w2Forms', name: 'W-2 Forms', icon: 'file-text-o' },
+                        { id: 'medical', name: 'Medical Documents', icon: 'file-text-o' },
+                        { id: 'education', name: 'Education Documents', icon: 'book' },
+                        { id: 'homeownerDeduction', name: 'Homeowner Documents', icon: 'home' },
+                        { id: 'personalId', name: 'Personal ID', icon: 'id-card-o' },
+                        { id: 'other', name: 'Other Documents', icon: 'file-o' }
+                      ].map((category) => (
+                        <Button
+                          key={category.id}
+                          variant={uploadCategory === category.id ? "default" : "outline"}
+                          style={uploadCategory === category.id ? 
+                            {...styles.categoryButton, ...styles.selectedCategoryButton} : 
+                            styles.categoryButton
+                          }
+                          onPress={() => setUploadCategory(category.id)}
+                        >
+                          <FontAwesome name={category.icon as any} size={16} color={uploadCategory === category.id ? "#fff" : "#007bff"} />
+                          <Text style={[
+                            styles.categoryButtonText,
+                            uploadCategory === category.id && styles.selectedCategoryButtonText
+                          ]}>
+                            {category.name}
+                          </Text>
+                        </Button>
+                      ))}
+                    </View>
+                  </View>
+
+                  {/* Description Section */}
+                  <View style={styles.uploadSection}>
+                    <Text style={styles.uploadSectionTitle}>Description (Optional)</Text>
+                    <Textarea
+                      placeholder="Add a description for this document..."
+                      value={uploadDescription}
+                      onChangeText={setUploadDescription}
+                      style={styles.uploadDescriptionInput}
+                    />
+                  </View>
+                </ScrollView>
+
+                {/* Modal Actions */}
+                <View style={styles.modalActions}>
+                  <Button 
+                    style={styles.cancelButton} 
+                    onPress={cancelUpload}
+                  >
+                    <Ionicons name="close" size={20} color="#fff" />
+                    <Text style={styles.modalButtonText}>Cancel</Text>
+                  </Button>
+                  
+                  <Button 
+                    style={styles.uploadModalButton} 
+                    onPress={pickDocument}
+                    disabled={!uploadCategory}
+                  >
+                    <Ionicons name="cloud-upload" size={20} color="#fff" />
+                    <Text style={styles.modalButtonText}>Select & Upload</Text>
+                  </Button>
+                </View>
+              </View>
+            </View>
+          </Modal>
+
+          {/* Edit Personal Information Selection Modal */}
+
+          {/* Edit Form Modal - Replaced with new components */}
+          {/* <EditFormModal
+            
+          /> */}
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      {/* Unified Edit Personal Information Modal - Replaced with new components */}
+      {/* <EditPersonalInfoModal
+       
+      /> */}
+
+      {/* New Modal Flow Components */}
+      <SectionSelectionModal
+        visible={showSectionModal}
+        onClose={() => setShowSectionModal(false)}
+        onSelectSection={handleSectionSelect}
+      />
+
+      <AdditionalIncomeModal
+        visible={showAdditionalIncomeModal}
+        onClose={handleCloseAdditionalIncomeModal}
+        applicationId={getApprovedTaxForm()?.id || ''}
+        userId={user?.id || ''}
+        token={token || ''}
+        initialIncomeSources={additionalIncome.map(item => ({
+          id: item.id,
+          source: item.source,
+          amount: item.amount,
+          description: item.description,
+          createdAt: new Date().toISOString()
+        }))}
+        initialDocuments={additionalDocuments.filter(doc => doc.category === 'additional_income')}
+        onIncomeSourcesUpdate={(sources) => {
+          setAdditionalIncome(sources.map(source => ({
+            id: source.id,
+            source: source.source,
+            amount: source.amount,
+            description: source.description
+          })));
+        }}
+        onDocumentsUpdate={(documents) => {
+          // Update additionalDocuments with new additional_income documents
+          const otherDocs = additionalDocuments.filter(doc => doc.category !== 'additional_income');
+          setAdditionalDocuments([...otherDocs, ...documents]);
+        }}
+      />
+
+      <DependentsModal
+        visible={showDependentsModal}
+        onClose={handleCloseDependentsModal}
+        applicationId={getApprovedTaxForm()?.id || ''}
+        userId={user?.id || ''}
+        token={token || ''}
+        initialDependents={dependents.map(item => ({
+          id: item.id,
+          name: item.name,
+          relationship: item.relationship,
+          dateOfBirth: item.dob,
+          age: item.age,
+          createdAt: new Date().toISOString()
+        }))}
+        initialDocuments={additionalDocuments.filter(doc => doc.category === 'dependents')}
+        onDependentsUpdate={(dependents) => {
+          setDependents(dependents.map(dep => ({
+            id: dep.id,
+            name: dep.name,
+            relationship: dep.relationship,
+            dob: dep.dateOfBirth,
+            age: dep.age
+          })));
+        }}
+        onDocumentsUpdate={(documents) => {
+          // Update additionalDocuments with new dependents documents
+          const otherDocs = additionalDocuments.filter(doc => doc.category !== 'dependents');
+          setAdditionalDocuments([...otherDocs, ...documents]);
+        }}
+      />
+
+      <MedicalDeductionModal
+        visible={showMedicalDeductionModal}
+        onClose={handleCloseMedicalDeductionModal}
+        applicationId={getApprovedTaxForm()?.id || ''}
+        userId={user?.id || ''}
+        token={token || ''}
+        initialDocuments={additionalDocuments.filter(doc => doc.category === 'medical_deduction')}
+        onDocumentsUpdate={(documents) => {
+          // Update additionalDocuments with new medical_deduction documents
+          const otherDocs = additionalDocuments.filter(doc => doc.category !== 'medical_deduction');
+          setAdditionalDocuments([...otherDocs, ...documents]);
+        }}
+        documents={[]}
+        onUploadDocument={async () => {}}
+        onRemoveDocument={async () => {}}
+        isLoading={false}
+      />
+
+      <PreviousYearTaxModal
+        visible={showPreviousYearTaxModal}
+        onClose={handleClosePreviousYearTaxModal}
+        applicationId={getApprovedTaxForm()?.id || ''}
+        userId={user?.id || ''}
+        token={token || ''}
+        initialDocuments={additionalDocuments.filter(doc => doc.category === 'previousYearTax')}
+        onDocumentsUpdate={(documents) => {
+          // Update additionalDocuments with new previousYearTax documents
+          const otherDocs = additionalDocuments.filter(doc => doc.category !== 'previousYearTax');
+          setAdditionalDocuments([...otherDocs, ...documents]);
+        }}
+        documents={[]}
+        onUploadDocument={async () => {}}
+        onRemoveDocument={async () => {}}
+        isLoading={false}
+      />
+
+      <EducationModal
+        visible={showEducationModal}
+        onClose={handleCloseEducationModal}
+        applicationId={getApprovedTaxForm()?.id || ''}
+        userId={user?.id || ''}
+        token={token || ''}
+        initialDocuments={additionalDocuments.filter(doc => doc.category === 'education')}
+        onDocumentsUpdate={(documents) => {
+          // Update additionalDocuments with new education documents
+          const otherDocs = additionalDocuments.filter(doc => doc.category !== 'education');
+          setAdditionalDocuments([...otherDocs, ...documents]);
+        }}
+        documents={[]}
+        onUploadDocument={async () => {}}
+        onRemoveDocument={async () => {}}
+        isLoading={false}
+      />
+
+      <HomeownerDeductionModal
+        visible={showHomeownerDeductionModal}
+        onClose={handleCloseHomeownerDeductionModal}
+        applicationId={getApprovedTaxForm()?.id || ''}
+        userId={user?.id || ''}
+        token={token || ''}
+        initialDocuments={additionalDocuments.filter(doc => doc.category === 'homeownerDeduction')}
+        onDocumentsUpdate={(documents) => {
+          // Update additionalDocuments with new homeownerDeduction documents
+          const otherDocs = additionalDocuments.filter(doc => doc.category !== 'homeownerDeduction');
+          setAdditionalDocuments([...otherDocs, ...documents]);
+        }}
+        documents={[]}
+        onUploadDocument={async () => {}}
+        onRemoveDocument={async () => {}}
+        isLoading={false}
+      />
+
+      <PersonalInfoModal
+        visible={showPersonalInfoModal}
+        onClose={handleClosePersonalInfoModal}
+        applicationId={getApprovedTaxForm()?.id || ''}
+        userId={user?.id || ''}
+        token={token || ''}
+        initialSsn={ssn}
+        initialDocuments={additionalDocuments.filter(doc => doc.category === 'personal_info')}
+        onSsnUpdate={(newSsn) => {
+          setSsn(newSsn);
+        }}
+        onDocumentsUpdate={(documents) => {
+          // Update additionalDocuments with new personal_info documents
+          const otherDocs = additionalDocuments.filter(doc => doc.category !== 'personal_info');
+          setAdditionalDocuments([...otherDocs, ...documents]);
+        }}
+      />
+    </SafeAreaWrapper>
+  );
+};
+
+const styles = StyleSheet.create({
+  mainContainer: {
+    flex: 1,
+    backgroundColor: '#001826',
+  },
+  container: {
+    flexGrow: 1,
+    backgroundColor: '#001826',
+    paddingHorizontal: Math.min(16, screenWidth * 0.04),
+    paddingBottom: 20,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  backButton: {
+    marginRight: 16,
+  },
+  headerTitle: {
+    fontSize: Math.min(20, screenWidth * 0.05),
+    fontWeight: 'bold',
+    color: '#ffffff',
+    flex: 1,
+  },
+  card: {
+    marginVertical: 8,
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  cardTitle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  cardTitleText: {
+    fontSize: Math.min(18, screenWidth * 0.045),
+    fontWeight: 'bold',
+    color: '#D7B04C',
+  },
+  // Section titles outside cards
+  sectionTitleContainer: {
+    alignItems: 'center',
+    marginVertical: 16,
+    marginHorizontal: 16,
+  },
+  sectionTitle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  sectionTitleText: {
+    fontSize: Math.min(18, screenWidth * 0.045),
+    fontWeight: 'bold',
+    color: '#D7B04C',
+  },
+  documentInfo: {
+    marginBottom: 16,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+    flexWrap: 'wrap',
+  },
+  infoLabel: {
+    fontWeight: '500',
+    color: '#D7B04C',
+    fontSize: Math.min(14, screenWidth * 0.035),
+  },
+  infoValue: {
+    fontWeight: '600',
+    color: '#333',
+    fontSize: Math.min(14, screenWidth * 0.035),
+    flex: 1,
+    textAlign: 'right',
+    marginLeft: 8,
+  },
+  viewButton: {
+    backgroundColor: '#0F172A',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    borderRadius: 8,
+  },
+  viewButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    marginLeft: 8,
+  },
+  sectionText: {
+    fontSize: Math.min(14, screenWidth * 0.035),
+    color: '#ffffff',
+    lineHeight: 20,
+    marginBottom: 16,
+  },
+  notesSection: {
+    marginBottom: 20,
+  },
+  notesLabel: {
+    fontSize: Math.min(14, screenWidth * 0.035),
+    fontWeight: '600',
+    marginBottom: 8,
+    color: '#D7B04C',
+  },
+  notesInput: {
+    minHeight: 100,
+    maxHeight: 150,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: Math.min(14, screenWidth * 0.035),
+  },
+  actionButtons: {
+    gap: 12,
+  },
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 8,
+    fontWeight: 'bold',
+  },
+  approveButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 8,
+    fontWeight: 'bold',
+    backgroundColor: '#28a745',
+  },
+  notesButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 8,
+    fontWeight: 'bold',
+    backgroundColor: '#6c757d',
+  },
+  actionButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    marginLeft: 8,
+  },
+  approvedCard: {
+    backgroundColor: '#d4edda',
+    borderColor: '#c3e6cb',
+  },
+  approvedContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  approvedText: {
+    fontSize: Math.min(16, screenWidth * 0.04),
+    fontWeight: '600',
+    color: '#155724',
+  },
+  documentItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  documentItemHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  documentItemInfo: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  documentItemTitle: {
+    fontWeight: 'bold',
+    fontSize: Math.min(14, screenWidth * 0.035),
+    color: '#333',
+  },
+  documentItemName: {
+    fontSize: Math.min(12, screenWidth * 0.03),
+    color: '#666',
+    marginTop: 2,
+  },
+  documentItemMeta: {
+    fontSize: Math.min(11, screenWidth * 0.028),
+    color: '#888',
+    marginTop: 2,
+  },
+  documentItemDesc: {
+    fontSize: Math.min(11, screenWidth * 0.028),
+    color: '#666',
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  viewDocumentButton: {
+    padding: 8,
+  },
+  // Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 24,
+    margin: Math.min(20, screenWidth * 0.05),
+    maxHeight: screenHeight * 0.85,
+    width: screenWidth * 0.9,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  modalScrollView: {
+    padding: Math.min(20, screenWidth * 0.05),
+  },
+  modalHeader: {
+    alignItems: 'center',
+    marginBottom: 32,
+    paddingTop: 8,
+  },
+  modalIconContainer: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#f0f8ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+    borderWidth: 2,
+    borderColor: '#e3f2fd',
+  },
+  modalTitle: {
+    fontSize: Math.min(24, screenWidth * 0.06),
+    fontWeight: '700',
+    color: '#2c3e50',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  modalSubtitle: {
+    fontSize: Math.min(16, screenWidth * 0.04),
+    color: '#6c757d',
+    textAlign: 'center',
+    lineHeight: 22,
+    paddingHorizontal: 20,
+  },
+  documentsSection: {
+    marginBottom: 24,
+  },
+  documentsSectionTitle: {
+    fontSize: Math.min(18, screenWidth * 0.045),
+    fontWeight: 'bold',
+    color: '#D7B04C',
+    marginBottom: 12,
+  },
+  documentCard: {
+    marginBottom: 8,
+    borderRadius: 8,
+    backgroundColor: '#ffffff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  documentCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  documentCardInfo: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  documentCardTitle: {
+    fontWeight: 'bold',
+    fontSize: Math.min(14, screenWidth * 0.035),
+    color: '#333',
+  },
+  documentCardType: {
+    fontSize: Math.min(12, screenWidth * 0.03),
+    color: '#007bff',
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  documentCardMeta: {
+    fontSize: Math.min(11, screenWidth * 0.028),
+    color: '#888',
+    marginTop: 2,
+  },
+  documentCardDesc: {
+    fontSize: Math.min(11, screenWidth * 0.028),
+    color: '#666',
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  termsSection: {
+    marginBottom: 20,
+  },
+  termsTitle: {
+    fontSize: Math.min(18, screenWidth * 0.045),
+    fontWeight: 'bold',
+    color: '#D7B04C',
+    marginBottom: 12,
+  },
+  termsContent: {
+    maxHeight: 200,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 12,
+    backgroundColor: '#f8f9fa',
+  },
+  termsText: {
+    fontSize: Math.min(12, screenWidth * 0.03),
+    color: '#666',
+    lineHeight: 18,
+  },
+  termsCheckbox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 16,
+    gap: 12,
+  },
+  termsCheckboxText: {
+    fontSize: Math.min(14, screenWidth * 0.035),
+    color: '#333',
+    fontWeight: '500',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    padding: Math.min(20, screenWidth * 0.05),
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+  },
+  modalButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 8,
+    fontWeight: 'bold',
+  },
+  rejectButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 8,
+    fontWeight: 'bold',
+    backgroundColor: '#dc3545',
+  },
+  acceptButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 8,
+    fontWeight: 'bold',
+    backgroundColor: '#28a745',
+  },
+  modalButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    marginLeft: 8,
+  },
+  loadingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  loadingText: {
+    marginLeft: 8,
+    color: '#333',
+    fontSize: 14,
+  },
+  errorText: {
+    color: '#e74c3c',
+    textAlign: 'center',
+    padding: 20,
+  },
+  noDataText: {
+    color: '#333',
+    textAlign: 'center',
+    padding: 20,
+    fontStyle: 'italic',
+  },
+  documentPreviewSection: {
+    marginBottom: 20,
+  },
+  documentPreviewTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 12,
+  },
+  documentPreviewInfo: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+  },
+  documentPreviewLabel: {
+    fontWeight: '500',
+    color: '#666',
+    fontSize: 14,
+  },
+  documentPreviewValue: {
+    fontWeight: '600',
+    color: '#333',
+    fontSize: 14,
+    flex: 1,
+    textAlign: 'right',
+    marginLeft: 8,
+  },
+  cancelButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 8,
+    backgroundColor: '#6c757d',
+  },
+  openButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 8,
+    backgroundColor: '#007bff',
+  },
+  // Admin notes styles
+  adminNoteItem: {
+    backgroundColor: '#f8f9fa',
+    padding: 16,
+    borderRadius: 8,
+    marginBottom: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: '#28a745',
+  },
+  adminNoteHeader: {
+    flex: 1,
+  },
+  adminNoteText: {
+    fontSize: 16,
+    lineHeight: 24,
+    color: '#333',
+    marginBottom: 8,
+  },
+  adminNoteMeta: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  adminNoteDate: {
+    fontSize: 12,
+    color: '#666',
+    fontStyle: 'italic',
+  },
+  adminNoteStatus: {
+    fontSize: 12,
+    fontWeight: '500',
+    fontFamily: 'System',
+  },
+  adminNoteAppId: {
+    fontSize: 11,
+    color: '#999',
+    fontStyle: 'italic',
+  },
+  // Status display styles
+  statusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  statusText: {
+    fontSize: 16,
+    fontWeight: '500',
+    fontFamily: 'System',
+  },
+  // Consistent data value styling
+  dataValue: {
+    fontSize: 16,
+    fontWeight: '500',
+    fontFamily: 'System',
+    color: '#333',
+  },
+  // Upload styles
+  uploadButton: {
+    backgroundColor: '#0F172A',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 8,
+    marginTop: 12,
+  },
+  uploadButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    marginLeft: 8,
+  },
+  uploadProgressContainer: {
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+  },
+  uploadProgressText: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  progressBar: {
+    height: 4,
+    backgroundColor: '#e9ecef',
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#007bff',
+    borderRadius: 2,
+  },
+  uploadSection: {
+    marginBottom: 24,
+  },
+  uploadSectionTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#ffffff',
+    marginBottom: 12,
+  },
+  categoryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  categoryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#007bff',
+    backgroundColor: 'transparent',
+    minWidth: '45%',
+    justifyContent: 'center',
+  },
+  selectedCategoryButton: {
+    backgroundColor: '#007bff',
+    borderColor: '#007bff',
+  },
+  categoryButtonText: {
+    marginLeft: 8,
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#007bff',
+  },
+  selectedCategoryButtonText: {
+    color: '#fff',
+  },
+  uploadDescriptionInput: {
+    minHeight: 80,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 14,
+  },
+  uploadModalButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 8,
+    backgroundColor: '#007bff',
+  },
+  // Disabled button style
+  disabledButton: {
+    backgroundColor: '#6c757d',
+    opacity: 0.6,
+  },
+  // Edit Personal Information styles
+  editInfoButton: {
+    backgroundColor: '#0F172A',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 8,
+    marginTop: 12,
+  },
+  editInfoButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    marginLeft: 8,
+  },
+  editSectionGrid: {
+    gap: 16,
+    marginBottom: 24,
+  },
+  editSectionCard: {
+    backgroundColor: '#fff',
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 20,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
+    marginHorizontal: 4,
+  },
+  editSectionIconContainer: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#f8f9fa',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 16,
+  },
+  editSectionContent: {
+    flex: 1,
+  },
+  editSectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#2c3e50',
+    marginBottom: 4,
+  },
+  editSectionDescription: {
+    fontSize: 14,
+    color: '#6c757d',
+    lineHeight: 20,
+  },
+  formSection: {
+    marginBottom: 24,
+  },
+  formSectionTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 8,
+  },
+  formDescription: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 16,
+    lineHeight: 20,
+  },
+  formField: {
+    marginBottom: 16,
+  },
+  formLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+  formInput: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 14,
+    minHeight: 44,
+  },
+  submitButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 8,
+    backgroundColor: '#28a745',
+  },
+  modernCancelButton: {
+    backgroundColor: '#f8f9fa',
+    paddingVertical: 16,
+    paddingHorizontal: 32,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modernCancelButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#6c757d',
+  },
+  // Form enhancement styles
+  formHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  addNewButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8f9fa',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#007bff',
+  },
+  addNewButtonText: {
+    color: '#007bff',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 4,
+  },
+  existingRecordsSection: {
+    marginBottom: 24,
+  },
+  existingRecordsTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#2c3e50',
+    marginBottom: 12,
+  },
+  recordCard: {
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  recordInfo: {
+    flex: 1,
+  },
+  recordTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#2c3e50',
+    marginBottom: 4,
+  },
+  recordSubtitle: {
+    fontSize: 14,
+    color: '#6c757d',
+  },
+  recordActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  editRecordButton: {
+    padding: 8,
+    borderRadius: 6,
+    backgroundColor: '#e3f2fd',
+  },
+  deleteRecordButton: {
+    padding: 8,
+    borderRadius: 6,
+    backgroundColor: '#ffebee',
+  },
+  emptyRecordsCard: {
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    padding: 24,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+    borderStyle: 'dashed',
+  },
+  emptyRecordsText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#6c757d',
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  emptyRecordsSubtext: {
+    fontSize: 14,
+    color: '#adb5bd',
+    textAlign: 'center',
+  },
+  editModeIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#e3f2fd',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+    borderLeftWidth: 4,
+    borderLeftColor: '#007bff',
+  },
+  editModeText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007bff',
+    marginLeft: 8,
+  },
+  // Edit section styles for the modal
+  personalInfoGrid: {
+    // gap: 16, // Not supported in older React Native versions
+  },
+  personalInfoCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+    marginBottom: 16,
+  },
+  personalInfoIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 16,
+  },
+  personalInfoContent: {
+    flex: 1,
+  },
+  personalInfoTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 4,
+  },
+  personalInfoDescription: {
+    fontSize: 14,
+    color: '#666',
+  },
+  personalInfoCancelButton: {
+    backgroundColor: '#6c757d',
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 20,
+  },
+  personalInfoCancelButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  // Form styles
+  pickerContainer: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    backgroundColor: '#f9f9f9',
+    marginBottom: 16,
+  },
+  picker: {
+    height: 50,
+  },
+  formUploadButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#e3f2fd',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#bbdefb',
+    marginTop: 8,
+  },
+  formUploadButtonText: {
+    color: '#007bff',
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  // Uploaded documents styles
+  uploadedDocumentsSection: {
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+  },
+  uploadedDocumentsTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#495057',
+    marginBottom: 8,
+  },
+  uploadedDocumentItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#fff',
+    borderRadius: 6,
+    marginBottom: 4,
+    borderWidth: 1,
+    borderColor: '#dee2e6',
+  },
+  uploadedDocumentInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  uploadedDocumentName: {
+    fontSize: 14,
+    color: '#495057',
+    marginLeft: 8,
+    flex: 1,
+  },
+  uploadedDocumentStatus: {
+    fontSize: 12,
+    color: '#28a745',
+    fontWeight: '500',
+    marginLeft: 8,
+  },
+  deleteDocumentButton: {
+    padding: 4,
+    borderRadius: 4,
+    backgroundColor: '#fff5f5',
+  },
+});
+
+export default DocumentReview; 
